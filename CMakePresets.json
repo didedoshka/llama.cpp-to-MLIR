@@ -1,0 +1,47 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21
+  },
+  "configurePresets": [
+    {
+      "name": "basic",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceParentDir}/ggml-mlir-${presetName}-build"
+    },
+    {
+      "name": "llama-cpp",
+      "hidden": true,
+      "environment": {
+        "llama-cpp-root-path": "${sourceParentDir}/llama-cpp-bin"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+
+        "ggml_DIR": "$env{llama-cpp-root-path}/lib/cmake/ggml",
+        "llama_DIR": "$env{llama-cpp-root-path}/lib/cmake/llama"
+      }
+    },
+    {
+      "name": "default",
+      "displayName": "default configuration",
+      "inherits": [
+        "basic",
+        "llama-cpp"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    }
+  ]
+}
