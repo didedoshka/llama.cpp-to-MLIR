@@ -1,3 +1,16 @@
-BasedOnStyle: LLVM
-AlwaysBreakTemplateDeclarations: Yes
-LineEnding: LF
+BasedOnStyle: Google
+---
+Language: Cpp
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Empty
+DerivePointerAlignment: false
+PointerAlignment: Left
+SortIncludes: false
+PackConstructorInitializers: Never
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: AfterComma
+
+IndentWidth: 4
+AccessModifierOffset: -4
+ColumnLimit: 0
