@@ -8,7 +8,6 @@
         {
             "name": "default",
             "cacheVariables": {
-                "FETCHCONTENT_SOURCE_DIR_LLAMA": "../llama.cpp",
                 "GGML_METAL": "OFF"
             }
         },
@@ -17,7 +16,8 @@
             "inherits": "default",
             "binaryDir": "build_debug",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "DEBUG"
+                "CMAKE_BUILD_TYPE": "DEBUG",
+                "BUILD_SHARED_LIBS": "OFF"
             },
             "environment": {
                 "MLIR_DIR": "/Users/didedoshka/programming/hse/compiler_term_project/installed_llvm"
