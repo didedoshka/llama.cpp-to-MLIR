@@ -5,9 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-# set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-
 # add llvm and mlir
 find_package(MLIR REQUIRED CONFIG)
 message("LLVM_DIR ${LLVM_DIR}")
@@ -25,29 +22,11 @@ include(HandleLLVMOptions)
 
 include_directories(${LLVM_INCLUDE_DIRS})
 
+# for files generated from tablegen
+include_directories(${CMAKE_BINARY_DIR}/source/MLIRGGML)
+
 # add llama
 add_subdirectory(llama.cpp)
 
-# for files generated from tablegen
-include_directories(${CMAKE_BINARY_DIR}/mlir)
-
-# add dialect and passes
-add_subdirectory(mlir)
-
-# add compiler
-add_executable(compiler compiler_test.cpp)
-llvm_update_compile_flags(compiler) # add no-rtti when needed
-target_link_libraries(
-  compiler
-  PRIVATE MLIRGGML
-          MLIRParser
-          MLIRSupport
-          MLIRIR
-          MLIRFuncDialect
-          MLIRFunctionInterfaces
-          MLIRArithDialect
-          MLIRPass
-          llama)
-
-# add_executable(test_llama test_llama.cpp) target_link_libraries(test_llama
-# llama)
+# add my libraries and executables
+add_subdirectory(source)

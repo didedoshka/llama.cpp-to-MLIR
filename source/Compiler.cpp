@@ -13,15 +13,16 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/GGMLDialect.h"
-#include "mlir/GGMLOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Passes.h"
+
+#include "MLIRGGML/GGMLDialect.h"
+#include "MLIRGGML/GGMLOps.h"
+#include "MLIRGGML/Passes.h"
 
 #include <ggml-cpp.h>
 #include <ggml.h>
@@ -50,19 +51,9 @@ static cl::opt<enum Output> outputType(
     cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
     cl::values(clEnumValN(Debug, "debugggg", "compile and compare result with llama.cpp")));
 
-struct MLIRGen {
-    mlir::MLIRContext context;
-    mlir::OpBuilder builder;
-    mlir::ModuleOp module;
-
-    MLIRGen() : builder(&context) {
-        context.getOrLoadDialect<mlir::ggml::GGMLDialect>();
-        context.getOrLoadDialect<mlir::func::FuncDialect>();
-        context.getOrLoadDialect<mlir::arith::ArithDialect>();
-
-        // module
-        module = mlir::ModuleOp::create(builder.getUnknownLoc());
-        builder.setInsertionPointToEnd(module.getBody());
+class MLIRGen {
+  public:
+    MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module) : context(context), builder(builder), module(module) {
     }
 
     void addOp() {
@@ -98,6 +89,10 @@ struct MLIRGen {
             return llvm::success();
         }
     }
+
+    mlir::MLIRContext &context;
+    mlir::OpBuilder &builder;
+    mlir::ModuleOp &module;
 };
 
 static float ggml_get_float_value(const ggml_tensor *tensor, size_t i0, size_t i1, size_t i2, size_t i3) {
@@ -196,7 +191,17 @@ int main(int argc, char **argv) {
     // cl::HideUnrelatedOptions(CompilerCategory);
     cl::ParseCommandLineOptions(argc, argv);
 
-    MLIRGen mlirGen{};
+    mlir::MLIRContext context;
+    context.getOrLoadDialect<mlir::ggml::GGMLDialect>();
+    context.getOrLoadDialect<mlir::func::FuncDialect>();
+    context.getOrLoadDialect<mlir::arith::ArithDialect>();
+
+    mlir::OpBuilder builder(&context);
+
+    mlir::ModuleOp module = mlir::ModuleOp::create(builder.getUnknownLoc());
+    builder.setInsertionPointToEnd(module.getBody());
+
+    MLIRGen mlirGen(context, builder, module);
 
     llamaRun(mlirGen, [](ggml_tensor *t, bool ask, void *userData) {
         if (ask) {
