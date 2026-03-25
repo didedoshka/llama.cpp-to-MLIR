@@ -1,3 +1,4 @@
 build*
 .*
 !.brd.lua
+compile_commands.json
