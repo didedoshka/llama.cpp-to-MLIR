@@ -14,4 +14,9 @@ target_link_libraries(
           MLIRFunctionInterfaces
           MLIRArithDialect
           MLIRPass
+          MLIRBufferizationTransforms
+          MLIRRegisterAllDialects
+          MLIRBufferizationToMemRef
           llama)
+
+mlir_check_all_link_libraries(compiler)

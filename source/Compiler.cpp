@@ -11,12 +11,26 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/BufferizationToMemRef/BufferizationToMemRef.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/Pipelines/Passes.h"
+#include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/InitAllDialects.h"
 #include "mlir/Pass/PassManager.h"
 
 #include <ggml-cpp.h>
@@ -51,16 +65,46 @@ static cl::opt<enum Output> outputType(
     "output", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(GGML, "ggml", "output ggml dialect")),
     cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
-    cl::values(clEnumValN(Debug, "debugggg", "compile and compare result with llama.cpp")));
+    cl::values(clEnumValN(Debug, "debug", "compile and compare result with llama.cpp")));
 
 llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
-    if (outputType == Output::TensorTOSA) {
-        mlir::PassManager pm(module->getName());
-        pm.addPass(mlir::ggml::createLoweringPass());
-        return pm.run(module);
-    } else {
+    if (outputType == Output::GGML) {
         return llvm::success();
     }
+    mlir::PassManager pm(module->getName());
+    if (outputType >= Output::TensorTOSA) {
+        pm.addPass(mlir::ggml::createLoweringPass());
+    }
+    if (outputType == Output::Debug) {
+        // -one-shot-bufferize="bufferize-function-boundaries"
+        mlir::bufferization::OneShotBufferizePassOptions oneShotBufferizePassOptions;
+        oneShotBufferizePassOptions.bufferizeFunctionBoundaries = true;
+        pm.addPass(mlir::bufferization::createOneShotBufferizePass(oneShotBufferizePassOptions));
+        // -buffer-deallocation-pipeline
+        mlir::bufferization::BufferDeallocationPipelineOptions bufferDeallocationPipelineOptions;
+        mlir::bufferization::buildBufferDeallocationPipeline(pm, bufferDeallocationPipelineOptions);
+        // -convert-bufferization-to-memref
+        pm.addPass(mlir::createConvertBufferizationToMemRefPass());
+        // -convert-linalg-to-loops
+        pm.addPass(mlir::createConvertLinalgToLoopsPass());
+        // -convert-scf-to-cf
+        pm.addPass(mlir::createSCFToControlFlowPass());
+        // -expand-strided-metadata
+        pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+        // -lower-affine
+        pm.addPass(mlir::createLowerAffinePass());
+        // -convert-arith-to-llvm
+        pm.addPass(mlir::createArithToLLVMConversionPass());
+        // -finalize-memref-to-llvm
+        pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
+        // -convert-func-to-llvm
+        pm.addPass(mlir::createConvertFuncToLLVMPass());
+        // -convert-cf-to-llvm
+        pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+        // -reconcile-unrealized-casts
+        pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+    }
+    return pm.run(module);
 }
 
 constexpr int TENSOR_OUTPUT_WIDTH = 3;
@@ -151,6 +195,11 @@ int main(int argc, char **argv) {
     cl::ParseCommandLineOptions(argc, argv);
 
     mlir::MLIRContext context;
+    // TODO: figure out the difference beetween register and getOrLoad, remove registerAllDialects
+    mlir::registerAllDialects(context);
+    // mlir::DialectRegistry dialectRegistry;
+    // dialectRegistry.insert<mlir::ggml::GGMLDialect, mlir::func::FuncDialect, mlir::arith::ArithDialect>();
+    // context.appendDialectRegistry(dialectRegistry);
     context.getOrLoadDialect<mlir::ggml::GGMLDialect>();
     context.getOrLoadDialect<mlir::func::FuncDialect>();
     context.getOrLoadDialect<mlir::arith::ArithDialect>();
@@ -192,10 +241,10 @@ int main(int argc, char **argv) {
     });
     mlirGen.finish();
 
-    // if (llvm::failed(mlirGen.RunPasses())) {
-    //     llvm::errs() << "RunPasses failed";
-    // }
-    //
+    if (llvm::failed(RunPasses(module))) {
+        llvm::errs() << "RunPasses failed";
+    }
+
     if (llvm::failed(mlir::verify(module))) {
         llvm::errs() << "module verification failed";
     }
