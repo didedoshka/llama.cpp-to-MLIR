@@ -1,4 +1,5 @@
-local preset = "debug"
+-- local preset = "debug"
+local preset = "sanitized"
 -- local preset = "release"
 local model = "../gguf/didedoshka.gguf"
 -- local model = "../../stories15M.gguf"

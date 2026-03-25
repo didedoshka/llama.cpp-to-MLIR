@@ -24,6 +24,14 @@
             }
         },
         {
+            "name": "sanitized",
+            "inherits": "debug",
+            "binaryDir": "build_sanitized",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS_DEBUG": "-fsanitize=address,undefined"
+            }
+        },
+        {
             "name": "release",
             "inherits": "default",
             "binaryDir": "build_release",
