@@ -1,5 +1,5 @@
--- local preset = "debug"
-local preset = "sanitized"
+local preset = "debug"
+-- local preset = "sanitized"
 -- local preset = "release"
 --
 local model = "../gguf/didedoshka.gguf"
@@ -14,7 +14,7 @@ return {
     compiler = {
         dir = "build_" .. preset,
         build = "cmake --build . --target compiler",
-        run = "ASAN_OPTIONS=detect_container_overflow=0 ./source/compiler " .. model .. " -debug -output=" .. output,
+        run = "ASAN_OPTIONS=detect_container_overflow=0 ./source/compiler " .. model .. " -debug -debug-only=ggml_mlir -output=" .. output,
     },
 
     cmake = {

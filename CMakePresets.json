@@ -8,7 +8,8 @@
         {
             "name": "default",
             "cacheVariables": {
-                "GGML_METAL": "OFF"
+                "GGML_METAL": "OFF",
+                "CMAKE_LINKER_TYPE": "LLD"
             }
         },
         {
