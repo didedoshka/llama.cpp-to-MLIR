@@ -14,7 +14,7 @@ return {
     compiler = {
         dir = "build_" .. preset,
         build = "cmake --build . --target compiler",
-        run = "ASAN_OPTIONS=detect_container_overflow=0,detect_leaks=1 ./source/compiler " .. model .. " -debug -output=" .. output,
+        run = "ASAN_OPTIONS=detect_container_overflow=0 ./source/compiler " .. model .. " -debug -output=" .. output,
     },
 
     cmake = {

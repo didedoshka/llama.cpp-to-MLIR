@@ -59,8 +59,7 @@ enum InputType { GGUF,
 
 namespace cl = llvm::cl;
 
-static cl::opt<std::string> inputFilename(cl::Positional,
-                                          cl::desc("<input file>"),
+static cl::opt<std::string> inputFilename(cl::Positional, cl::desc("<input file>"),
                                           cl::value_desc("filename"));
 
 namespace {
@@ -69,14 +68,14 @@ enum Output { GGML,
               LLVMMLIR,
               Debug };
 } // namespace
-static cl::opt<enum Output> outputType(
-    "output", cl::desc("Select the kind of output desired"),
-    cl::values(clEnumValN(GGML, "ggml", "output ggml dialect")),
-    cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
-    cl::values(clEnumValN(LLVMMLIR, "llvmmlir", "output lowered to llvmmlir")),
-    cl::values(clEnumValN(Debug, "debug", "compile and compare result with llama.cpp")));
+static cl::opt<enum Output>
+    outputType("output", cl::desc("Select the kind of output desired"),
+               cl::values(clEnumValN(GGML, "ggml", "output ggml dialect")),
+               cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
+               cl::values(clEnumValN(LLVMMLIR, "llvmmlir", "output lowered to llvmmlir")),
+               cl::values(clEnumValN(Debug, "debug", "compile and compare result with llama.cpp")));
 
-llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
+static llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
     if (outputType == Output::GGML) {
         return llvm::success();
     }
@@ -116,7 +115,7 @@ llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
     return pm.run(module);
 }
 
-static llvm::LogicalResult runJit(mlir::ModuleOp &module) {
+static llvm::LogicalResult runJIT(mlir::ModuleOp &module, mlir::OwningMemRef<float, 4> &res) {
     // Initialize LLVM targets.
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
@@ -126,11 +125,6 @@ static llvm::LogicalResult runJit(mlir::ModuleOp &module) {
     mlir::registerBuiltinDialectTranslation(*module->getContext());
     mlir::registerLLVMDialectTranslation(*module->getContext());
 
-    // An optimization pipeline to use within the execution engine.
-    // auto optPipeline = mlir::makeOptimizingTransformer(
-    //     /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
-    //     /*targetMachine=*/nullptr);
-
     // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
     // the module.
     mlir::ExecutionEngineOptions engineOptions;
@@ -139,66 +133,14 @@ static llvm::LogicalResult runJit(mlir::ModuleOp &module) {
     assert(maybeEngine && "failed to construct an execution engine");
     auto &engine = maybeEngine.get();
 
-    // Invoke the JIT-compiled function.
-    mlir::OwningMemRef<float, 4> res({1, 1, 5, 3});
     auto resPointer = &*res;
-    auto invocationResult = engine->invoke("compute_graph_forward", mlir::ExecutionEngine::result(resPointer));
-    // auto invocationResult = engine->invokePacked("compute_graph_forward", mlir::ExecutionEngine::result(res));
+    auto invocationResult =
+        engine->invoke("compute_graph_forward", mlir::ExecutionEngine::result(resPointer));
     if (invocationResult) {
-        llvm::errs() << "JIT invocation failed\n";
         return llvm::failure();
     }
 
-    LDBG() << "Function executed successfully";
-    LDBG() << res->sizes[0] << ' ' << res->sizes[1] << ' ' << res->sizes[2] << ' ' << res->sizes[3];
-
-    LDBG() << res[{0, 0, 0, 0}];
-    LDBG() << res[{0, 0, 0, 1}];
-    LDBG() << res[{0, 0, 1, 0}];
-    LDBG() << res[{0, 0, 1, 1}];
-
     return llvm::success();
-}
-
-constexpr int TENSOR_OUTPUT_WIDTH = 3;
-
-static std::string formatGGMLTensor(const ggml_tensor *tensor) {
-    const int64_t *ne = tensor->ne;
-    std::string str;
-    llvm::raw_string_ostream strBuilder(str);
-    strBuilder << std::string(tensor->name) << ' ' << ggml_get_type_traits(tensor->type)->type_name << '\n';
-    strBuilder << ne[3] << ' ' << ne[2] << ' ' << ne[1] << ' ' << ne[0] << '\n';
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        strBuilder << "[\n";
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == TENSOR_OUTPUT_WIDTH && ne[2] > 2 * TENSOR_OUTPUT_WIDTH) {
-                strBuilder << " ..., \n";
-                i2 = ne[2] - TENSOR_OUTPUT_WIDTH;
-            }
-            strBuilder << " [\n";
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == TENSOR_OUTPUT_WIDTH && ne[1] > 2 * TENSOR_OUTPUT_WIDTH) {
-                    strBuilder << "  ..., \n";
-                    i1 = ne[1] - TENSOR_OUTPUT_WIDTH;
-                }
-                strBuilder << "  [";
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == TENSOR_OUTPUT_WIDTH && ne[0] > 2 * TENSOR_OUTPUT_WIDTH) {
-                        strBuilder << "..., ";
-                        i0 = ne[0] - TENSOR_OUTPUT_WIDTH;
-                    }
-                    const float v = ggmlTensorGet(tensor, i0, i1, i2, i3);
-                    strBuilder << llvm::formatv("{0:F3}", v);
-                    if (i0 < ne[0] - 1)
-                        strBuilder << ", ";
-                }
-                strBuilder << "],\n";
-            }
-            strBuilder << " ],\n";
-        }
-        strBuilder << "]\n";
-    }
-    return str;
 }
 
 struct DebugData {
@@ -226,22 +168,25 @@ void llamaRun(UserData &userData, ggml_backend_sched_eval_callback cb) {
 
 // https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md
 // 13 different operations
-// ADD linalg.add
-// CPY     // a -> b, return view(b) what is view in ggml? looks like copy-on-write
-// FLASH_ATTN_EXT
-// GET_ROWS https://mlir.llvm.org/docs/Dialects/TOSA/ https://www.rdocumentation.org/packages/ggmlR/versions/0.6.1/topics/ggml_get_rows
-// GLU ggml.h:1253
-// MUL linalg.mul
-// MUL_MAT linalg.matmul
-// PERMUTE multidimensional transpose. in ggml is done without copying sometimes (and no-op on most backends), can it create problems?
-// RESHAPE tensor.reshape
-// RMS_NORM https://docs.pytorch.org/docs/stable/generated/torch.nn.modules.normalization.RMSNorm.html
-// ROPE ggml.h:1747
-// SET_ROWS
-// VIEW ggml.h:830?
+// 01. ADD linalg.add
+// 02. CPY     a -> b, return view(b) what is view in ggml? looks like copy-on-write
+// 03. FLASH_ATTN_EXT
+// 04. GET_ROWS https://mlir.llvm.org/docs/Dialects/TOSA/
+// https://www.rdocumentation.org/packages/ggmlR/versions/0.6.1/topics/ggml_get_rows
+// 05. GLU ggml.h:1253
+// 06. MUL linalg.mul
+// 07. MUL_MAT linalg.matmul
+// 08. PERMUTE multidimensional transpose. in ggml is done without copying
+// sometimes (and no-op on most backends), can it create problems?
+// 09. RESHAPE tensor.reshape
+// 10. RMS_NORM
+// https://docs.pytorch.org/docs/stable/generated/torch.nn.modules.normalization.RMSNorm.html
+// 11. ROPE ggml.h:1747
+// 12. SET_ROWS
+// 13. VIEW ggml.h:830?
 
-// constexpr int64_t executeNOperations = INT32_MAX;
-constexpr int64_t executeNOperations = 1;
+constexpr int64_t executeNOperations = INT32_MAX;
+// constexpr int64_t executeNOperations = 1;
 
 int main(int argc, char **argv) {
     // cl::HideUnrelatedOptions(CompilerCategory);
@@ -264,6 +209,7 @@ int main(int argc, char **argv) {
 
     UserData userData{MLIRGen(context, builder, module), DebugData()};
     MLIRGen &mlirGen = userData.mlirGen;
+    DebugData &debugData = userData.debugData;
 
     llamaRun(userData, [](ggml_tensor *t, bool ask, void *rawUserData) {
         UserData *userData = static_cast<UserData *>(rawUserData);
@@ -280,14 +226,14 @@ int main(int argc, char **argv) {
             const ggml_tensor *src0 = t->src[0];
             const ggml_tensor *src1 = t->src[1];
 
-            LDBG() << formatGGMLTensor(src0);
+            LDBG() << ggmlTensorFormat(src0);
             if (src1 != nullptr) {
-                LDBG() << formatGGMLTensor(src1);
+                LDBG() << ggmlTensorFormat(src1);
             }
             mlirGen.addOp(t);
             return true;
         }
-        LDBG() << formatGGMLTensor(t);
+        LDBG() << ggmlTensorFormat(t);
         debugData.result = t;
 
         return true;
@@ -305,8 +251,22 @@ int main(int argc, char **argv) {
     module->dump();
 
     if (outputType == Output::Debug) {
-        if (llvm::failed(runJit(module))) {
-            llvm::errs() << "running JIT failed";
+        mlir::OwningMemRef<float, 4> mlirResult(llvm::ArrayRef<int64_t>{0, 0, 0, 0});
+        if (llvm::failed(runJIT(module, mlirResult))) {
+            llvm::errs() << "JIT failed";
+        }
+        LDBG() << "JIT succeeded\n";
+        LDBG() << "GGML result tensor\n"
+               << ggmlTensorFormat(debugData.result);
+        LDBG() << "MLIR result tensor\n"
+               << mlirTensorFormat(mlirResult);
+
+        auto difference = compareGGMLAndMLIRResults(debugData.result, mlirResult);
+        if (difference != "") {
+            LDBG() << "Failure. MLIR and GGML produced different results";
+            LDBG() << difference;
+        } else {
+            LDBG() << "Success. MLIR and GGML produced the same result";
         }
     }
 

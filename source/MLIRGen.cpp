@@ -9,12 +9,10 @@
 
 #include "MLIRGGML/GGMLOps.h"
 
-MLIRGen::MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module) : context(context), builder(builder), module(module) {
-    func = mlir::func::FuncOp::create(
-        builder,
-        builder.getUnknownLoc(),
-        "compute_graph_forward",
-        builder.getFunctionType({}, {}));
+MLIRGen::MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module)
+    : context(context), builder(builder), module(module) {
+    func = mlir::func::FuncOp::create(builder, builder.getUnknownLoc(), "compute_graph_forward",
+                                      builder.getFunctionType({}, {}));
     func->setAttr("llvm.emit_c_interface", builder.getUnitAttr());
     mlir::Block *entryBlock = func.addEntryBlock();
     builder.setInsertionPointToStart(entryBlock);
@@ -62,7 +60,7 @@ void MLIRGen::addOp(const ggml_tensor *t) {
         } else {
             auto rankedTensorType = getGGMLTensorType(t);
             auto dataRaw = getGGMLTensorData(source);
-    auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
+            auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
             auto op = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
             tensors.insert({source->name, op});
             sources.push_back(op);
@@ -74,11 +72,9 @@ void MLIRGen::addOp(const ggml_tensor *t) {
     // default:;
     // }
 
-    auto result = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
-    last = result;
-    // auto op = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), builder.getF32FloatAttr(5.0));
-    // mlir::func::ReturnOp::create(builder, builder.getUnknownLoc(), {op});
-    // func.setFunctionType(builder.getFunctionType({}, {op.getType()}));
+    auto op = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
+    tensors.insert_or_assign(t->name, op);
+    last = op;
 }
 
 void MLIRGen::finish() {
