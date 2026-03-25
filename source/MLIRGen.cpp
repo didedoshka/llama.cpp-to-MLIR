@@ -9,6 +9,8 @@
 
 #include "MLIRGGML/GGMLOps.h"
 
+#include "Defines.h"
+
 MLIRGen::MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module)
     : context(context), builder(builder), module(module) {
     func = mlir::func::FuncOp::create(builder, builder.getUnknownLoc(), "compute_graph_forward",

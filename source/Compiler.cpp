@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -52,9 +53,10 @@
 #include "MLIRGen.h"
 #include "Utils.h"
 
+#include "Defines.h"
+
 namespace {
-enum InputType { GGUF,
-                 MLIR };
+enum InputType { GGUF, MLIR };
 } // namespace
 
 namespace cl = llvm::cl;
@@ -63,10 +65,7 @@ static cl::opt<std::string> inputFilename(cl::Positional, cl::desc("<input file>
                                           cl::value_desc("filename"));
 
 namespace {
-enum Output { GGML,
-              TensorTOSA,
-              LLVMMLIR,
-              Debug };
+enum Output { GGML, TensorTOSA, LLVMMLIR, Debug };
 } // namespace
 static cl::opt<enum Output>
     outputType("output", cl::desc("Select the kind of output desired"),
@@ -146,6 +145,9 @@ static llvm::LogicalResult runJIT(mlir::ModuleOp &module, mlir::OwningMemRef<flo
 struct DebugData {
     int nOperations = 0;
     ggml_tensor *result;
+
+    ggml_tensor resultCopy;
+    void *resultData;
 };
 
 struct UserData {
@@ -185,8 +187,8 @@ void llamaRun(UserData &userData, ggml_backend_sched_eval_callback cb) {
 // 12. SET_ROWS
 // 13. VIEW ggml.h:830?
 
-constexpr int64_t executeNOperations = INT32_MAX;
-// constexpr int64_t executeNOperations = 1;
+// constexpr int64_t executeNOperations = INT32_MAX;
+constexpr int64_t executeNOperations = 1;
 
 int main(int argc, char **argv) {
     // cl::HideUnrelatedOptions(CompilerCategory);
@@ -216,7 +218,21 @@ int main(int argc, char **argv) {
         MLIRGen &mlirGen = userData->mlirGen;
         DebugData &debugData = userData->debugData;
         if (debugData.nOperations == 2 * executeNOperations) {
-            return false;
+            LDBG() << debugData.nOperations << " " << ask;
+            if (ask) {
+                size_t nbytes = ggml_nbytes(debugData.result);
+                // it memory leaks, no problem with that
+                memcpy(&debugData.resultCopy, debugData.result, sizeof(*debugData.result));
+
+                debugData.resultData = malloc(nbytes);
+                memcpy(debugData.resultData, debugData.result->data, nbytes);
+                debugData.resultCopy.data = debugData.resultData;
+
+                debugData.result = &debugData.resultCopy;
+                return true;
+            } else {
+                return false;
+            }
         }
         ++debugData.nOperations;
 
@@ -250,16 +266,16 @@ int main(int argc, char **argv) {
 
     module->dump();
 
+    LDBG() << debugData.result;
+
     if (outputType == Output::Debug) {
         mlir::OwningMemRef<float, 4> mlirResult(llvm::ArrayRef<int64_t>{0, 0, 0, 0});
         if (llvm::failed(runJIT(module, mlirResult))) {
             llvm::errs() << "JIT failed";
         }
         LDBG() << "JIT succeeded\n";
-        LDBG() << "GGML result tensor\n"
-               << ggmlTensorFormat(debugData.result);
-        LDBG() << "MLIR result tensor\n"
-               << mlirTensorFormat(mlirResult);
+        LDBG() << "GGML result tensor\n" << ggmlTensorFormat(debugData.result);
+        LDBG() << "MLIR result tensor\n" << mlirTensorFormat(mlirResult);
 
         auto difference = compareGGMLAndMLIRResults(debugData.result, mlirResult);
         if (difference != "") {
