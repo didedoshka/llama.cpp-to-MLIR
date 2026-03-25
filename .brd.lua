@@ -1,14 +1,20 @@
 -- local preset = "debug"
 local preset = "sanitized"
 -- local preset = "release"
+--
 local model = "../gguf/didedoshka.gguf"
 -- local model = "../../stories15M.gguf"
+--
+-- local output = "ggml"
+-- local output = "tensor_tosa"
+-- local output = "llvmmlir"
+local output = "debug"
 
 return {
     compiler = {
         dir = "build_" .. preset,
         build = "cmake --build . --target compiler",
-        run = "./source/compiler " .. model .. " -debug -output=tensor_tosa",
+        run = "ASAN_OPTIONS=detect_container_overflow=0,detect_leaks=1 ./source/compiler " .. model .. " -debug -output=" .. output,
     },
 
     cmake = {
