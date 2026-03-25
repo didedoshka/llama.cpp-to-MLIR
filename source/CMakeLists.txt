@@ -17,6 +17,7 @@ target_link_libraries(
           MLIRBufferizationTransforms
           MLIRRegisterAllDialects
           MLIRBufferizationToMemRef
+          MLIRExecutionEngine
           llama)
 
 mlir_check_all_link_libraries(compiler)

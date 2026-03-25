@@ -9,6 +9,7 @@
 #include "llvm/Support/DebugLog.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -26,12 +27,18 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/ExecutionEngine/ExecutionEngine.h"
+#include "mlir/ExecutionEngine/MemRefUtils.h"
+#include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Export.h"
 
 #include <ggml-cpp.h>
 #include <ggml.h>
@@ -59,12 +66,14 @@ static cl::opt<std::string> inputFilename(cl::Positional,
 namespace {
 enum Output { GGML,
               TensorTOSA,
+              LLVMMLIR,
               Debug };
 } // namespace
 static cl::opt<enum Output> outputType(
     "output", cl::desc("Select the kind of output desired"),
     cl::values(clEnumValN(GGML, "ggml", "output ggml dialect")),
     cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
+    cl::values(clEnumValN(LLVMMLIR, "llvmmlir", "output lowered to llvmmlir")),
     cl::values(clEnumValN(Debug, "debug", "compile and compare result with llama.cpp")));
 
 llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
@@ -75,7 +84,7 @@ llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
     if (outputType >= Output::TensorTOSA) {
         pm.addPass(mlir::ggml::createLoweringPass());
     }
-    if (outputType == Output::Debug) {
+    if (outputType >= Output::LLVMMLIR) {
         // -one-shot-bufferize="bufferize-function-boundaries"
         mlir::bufferization::OneShotBufferizePassOptions oneShotBufferizePassOptions;
         oneShotBufferizePassOptions.bufferizeFunctionBoundaries = true;
@@ -105,6 +114,50 @@ llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
         pm.addPass(mlir::createReconcileUnrealizedCastsPass());
     }
     return pm.run(module);
+}
+
+static llvm::LogicalResult runJit(mlir::ModuleOp &module) {
+    // Initialize LLVM targets.
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+
+    // Register the translation from MLIR to LLVM IR, which must happen before we
+    // can JIT-compile.
+    mlir::registerBuiltinDialectTranslation(*module->getContext());
+    mlir::registerLLVMDialectTranslation(*module->getContext());
+
+    // An optimization pipeline to use within the execution engine.
+    // auto optPipeline = mlir::makeOptimizingTransformer(
+    //     /*optLevel=*/enableOpt ? 3 : 0, /*sizeLevel=*/0,
+    //     /*targetMachine=*/nullptr);
+
+    // Create an MLIR execution engine. The execution engine eagerly JIT-compiles
+    // the module.
+    mlir::ExecutionEngineOptions engineOptions;
+    // engineOptions.transformer = optPipeline;
+    auto maybeEngine = mlir::ExecutionEngine::create(module, engineOptions);
+    assert(maybeEngine && "failed to construct an execution engine");
+    auto &engine = maybeEngine.get();
+
+    // Invoke the JIT-compiled function.
+    mlir::OwningMemRef<float, 4> res({1, 1, 5, 3});
+    auto resPointer = &*res;
+    auto invocationResult = engine->invoke("compute_graph_forward", mlir::ExecutionEngine::result(resPointer));
+    // auto invocationResult = engine->invokePacked("compute_graph_forward", mlir::ExecutionEngine::result(res));
+    if (invocationResult) {
+        llvm::errs() << "JIT invocation failed\n";
+        return llvm::failure();
+    }
+
+    LDBG() << "Function executed successfully";
+    LDBG() << res->sizes[0] << ' ' << res->sizes[1] << ' ' << res->sizes[2] << ' ' << res->sizes[3];
+
+    LDBG() << res[{0, 0, 0, 0}];
+    LDBG() << res[{0, 0, 0, 1}];
+    LDBG() << res[{0, 0, 1, 0}];
+    LDBG() << res[{0, 0, 1, 1}];
+
+    return llvm::success();
 }
 
 constexpr int TENSOR_OUTPUT_WIDTH = 3;
@@ -250,6 +303,12 @@ int main(int argc, char **argv) {
     }
 
     module->dump();
+
+    if (outputType == Output::Debug) {
+        if (llvm::failed(runJit(module))) {
+            llvm::errs() << "running JIT failed";
+        }
+    }
 
     return 0;
 }
