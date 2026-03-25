@@ -14,20 +14,22 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
 
-#include "MLIRGGML/GGMLDialect.h"
-#include "MLIRGGML/GGMLOps.h"
-#include "MLIRGGML/Passes.h"
-
 #include <ggml-cpp.h>
 #include <ggml.h>
 #include <gguf.h>
 #include <llama.h>
+
+#include "MLIRGGML/GGMLDialect.h"
+#include "MLIRGGML/GGMLOps.h"
+#include "MLIRGGML/Passes.h"
+
+#include "MLIRGen.h"
+#include "Utils.h"
 
 namespace {
 enum InputType { GGUF,
@@ -51,70 +53,14 @@ static cl::opt<enum Output> outputType(
     cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
     cl::values(clEnumValN(Debug, "debugggg", "compile and compare result with llama.cpp")));
 
-class MLIRGen {
-  public:
-    MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module) : context(context), builder(builder), module(module) {
-    }
-
-    void addOp() {
-        auto rankedTensorType = mlir::RankedTensorType::get({2, 2}, builder.getF32Type());
-
-        // function
-        auto func = mlir::func::FuncOp::create(
-            builder,
-            builder.getUnknownLoc(),
-            "compute_graph_forward",
-            builder.getFunctionType({}, rankedTensorType));
-        mlir::Block *entryBlock = func.addEntryBlock();
-        builder.setInsertionPointToStart(entryBlock);
-
-        llvm::SmallVector<float, 4> dataRaw = {1, 2, 3, 4};
-        auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
-        // firstTensor
-        auto firstTensor = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
-        // firstTensor
-        auto secondTensor = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
-        // AddOp
-        auto result = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), firstTensor, secondTensor);
-        // ReturnOp
-        mlir::func::ReturnOp::create(builder, builder.getUnknownLoc(), {result});
-    }
-
-    llvm::LogicalResult RunPasses() {
-        if (outputType == Output::TensorTOSA) {
-            mlir::PassManager pm(module->getName());
-            pm.addPass(mlir::ggml::createLoweringPass());
-            return pm.run(module);
-        } else {
-            return llvm::success();
-        }
-    }
-
-    mlir::MLIRContext &context;
-    mlir::OpBuilder &builder;
-    mlir::ModuleOp &module;
-};
-
-static float ggml_get_float_value(const ggml_tensor *tensor, size_t i0, size_t i1, size_t i2, size_t i3) {
-    size_t i = i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0];
-    float v;
-    uint8_t *data = static_cast<uint8_t *>(tensor->data);
-    if (tensor->type == GGML_TYPE_F16) {
-        v = ggml_fp16_to_fp32(*(const ggml_fp16_t *)&data[i]);
-    } else if (tensor->type == GGML_TYPE_F32) {
-        v = *(const float *)&data[i];
-    } else if (tensor->type == GGML_TYPE_I64) {
-        v = (float)*(const int64_t *)&data[i];
-    } else if (tensor->type == GGML_TYPE_I32) {
-        v = (float)*(const int32_t *)&data[i];
-    } else if (tensor->type == GGML_TYPE_I16) {
-        v = (float)*(const int16_t *)&data[i];
-    } else if (tensor->type == GGML_TYPE_I8) {
-        v = (float)*(const int8_t *)&data[i];
+llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
+    if (outputType == Output::TensorTOSA) {
+        mlir::PassManager pm(module->getName());
+        pm.addPass(mlir::ggml::createLoweringPass());
+        return pm.run(module);
     } else {
-        LDBG() << "unexpected type: " << ggml_get_type_traits(tensor->type)->type_name;
+        return llvm::success();
     }
-    return v;
 }
 
 constexpr int TENSOR_OUTPUT_WIDTH = 3;
@@ -144,7 +90,7 @@ static std::string formatGGMLTensor(const ggml_tensor *tensor) {
                         strBuilder << "..., ";
                         i0 = ne[0] - TENSOR_OUTPUT_WIDTH;
                     }
-                    const float v = ggml_get_float_value(tensor, i0, i1, i2, i3);
+                    const float v = ggmlTensorGet(tensor, i0, i1, i2, i3);
                     strBuilder << llvm::formatv("{0:F3}", v);
                     if (i0 < ne[0] - 1)
                         strBuilder << ", ";
@@ -158,12 +104,22 @@ static std::string formatGGMLTensor(const ggml_tensor *tensor) {
     return str;
 }
 
-void llamaRun(MLIRGen &mlirGen, ggml_backend_sched_eval_callback cb) {
+struct DebugData {
+    int nOperations = 0;
+    ggml_tensor *result;
+};
+
+struct UserData {
+    MLIRGen mlirGen;
+    DebugData debugData;
+};
+
+void llamaRun(UserData userData, ggml_backend_sched_eval_callback cb) {
     llama_model_params model_params = llama_model_default_params();
     struct llama_model *model = llama_model_load_from_file(inputFilename.data(), model_params);
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.cb_eval_user_data = &mlirGen;
+    ctx_params.cb_eval_user_data = &userData;
     ctx_params.cb_eval = cb;
 
     llama_context *ctx = llama_init_from_model(model, ctx_params);
@@ -187,6 +143,9 @@ void llamaRun(MLIRGen &mlirGen, ggml_backend_sched_eval_callback cb) {
 // SET_ROWS
 // VIEW ggml.h:830?
 
+// constexpr int64_t executeNOperations = INT32_MAX;
+constexpr int64_t executeNOperations = 1;
+
 int main(int argc, char **argv) {
     // cl::HideUnrelatedOptions(CompilerCategory);
     cl::ParseCommandLineOptions(argc, argv);
@@ -201,38 +160,48 @@ int main(int argc, char **argv) {
     mlir::ModuleOp module = mlir::ModuleOp::create(builder.getUnknownLoc());
     builder.setInsertionPointToEnd(module.getBody());
 
-    MLIRGen mlirGen(context, builder, module);
+    UserData userData{MLIRGen(context, builder, module), DebugData()};
+    MLIRGen& mlirGen = userData.mlirGen;
 
-    llamaRun(mlirGen, [](ggml_tensor *t, bool ask, void *userData) {
+    llamaRun(userData, [](ggml_tensor *t, bool ask, void *rawUserData) {
+        UserData *userData = static_cast<UserData *>(rawUserData);
+        MLIRGen &mlirGen = userData->mlirGen;
+        DebugData &debugData = userData->debugData;
+        if (debugData.nOperations == 2 * executeNOperations) {
+            return false;
+        }
+        ++debugData.nOperations;
+
         if (ask) {
+            LDBG() << "Adding operation " << ggml_op_name(t->op) << '\n';
+
+            const ggml_tensor *src0 = t->src[0];
+            const ggml_tensor *src1 = t->src[1];
+
+            LDBG() << formatGGMLTensor(src0);
+            if (src1 != nullptr) {
+                LDBG() << formatGGMLTensor(src1);
+            }
+            mlirGen.addOp(t);
             return true;
         }
-        MLIRGen *mlirGen = static_cast<MLIRGen *>(userData);
-        LDBG() << ggml_op_name(t->op) << '\n';
-
-        const ggml_tensor *src0 = t->src[0];
-        const ggml_tensor *src1 = t->src[1];
-
-        LDBG() << formatGGMLTensor(src0);
-        if (src1 != nullptr) {
-            LDBG() << formatGGMLTensor(src1);
-        }
         LDBG() << formatGGMLTensor(t);
+        // debugData.result = t;
 
         return true;
     });
+    mlirGen.finish();
 
-    // mlirGen.addOp();
     //
     // if (llvm::failed(mlirGen.RunPasses())) {
     //     llvm::errs() << "RunPasses failed";
     // }
     //
-    // if (llvm::failed(mlir::verify(mlirGen.module))) {
-    //     llvm::errs() << "module verification failed";
-    // }
-    //
-    // mlirGen.module->dump();
+    if (llvm::failed(mlir::verify(module))) {
+        llvm::errs() << "module verification failed";
+    }
+
+    module->dump();
 
     return 0;
 }

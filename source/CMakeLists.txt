@@ -1,9 +1,8 @@
 # add dialect and passes
 add_subdirectory(MLIRGGML)
 
-
 # add compiler
-add_executable(compiler Compiler.cpp)
+add_executable(compiler Compiler.cpp MLIRGen.cpp Utils.cpp)
 llvm_update_compile_flags(compiler) # add no-rtti when needed
 target_link_libraries(
   compiler
