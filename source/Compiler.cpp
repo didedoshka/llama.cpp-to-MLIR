@@ -114,7 +114,7 @@ struct UserData {
     DebugData debugData;
 };
 
-void llamaRun(UserData userData, ggml_backend_sched_eval_callback cb) {
+void llamaRun(UserData &userData, ggml_backend_sched_eval_callback cb) {
     llama_model_params model_params = llama_model_default_params();
     struct llama_model *model = llama_model_load_from_file(inputFilename.data(), model_params);
 
@@ -161,7 +161,7 @@ int main(int argc, char **argv) {
     builder.setInsertionPointToEnd(module.getBody());
 
     UserData userData{MLIRGen(context, builder, module), DebugData()};
-    MLIRGen& mlirGen = userData.mlirGen;
+    MLIRGen &mlirGen = userData.mlirGen;
 
     llamaRun(userData, [](ggml_tensor *t, bool ask, void *rawUserData) {
         UserData *userData = static_cast<UserData *>(rawUserData);
@@ -186,13 +186,12 @@ int main(int argc, char **argv) {
             return true;
         }
         LDBG() << formatGGMLTensor(t);
-        // debugData.result = t;
+        debugData.result = t;
 
         return true;
     });
     mlirGen.finish();
 
-    //
     // if (llvm::failed(mlirGen.RunPasses())) {
     //     llvm::errs() << "RunPasses failed";
     // }

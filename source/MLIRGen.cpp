@@ -10,13 +10,13 @@
 #include "MLIRGGML/GGMLOps.h"
 
 MLIRGen::MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module) : context(context), builder(builder), module(module) {
-    // func = mlir::func::FuncOp::create(
-    //     builder,
-    //     builder.getUnknownLoc(),
-    //     "compute_graph_forward",
-    //     builder.getFunctionType({}, {}));
-    // mlir::Block *entryBlock = func.addEntryBlock();
-    // builder.setInsertionPointToStart(entryBlock);
+    func = mlir::func::FuncOp::create(
+        builder,
+        builder.getUnknownLoc(),
+        "compute_graph_forward",
+        builder.getFunctionType({}, {}));
+    mlir::Block *entryBlock = func.addEntryBlock();
+    builder.setInsertionPointToStart(entryBlock);
 }
 
 mlir::RankedTensorType MLIRGen::getGGMLTensorType(const ggml_tensor *t) {
@@ -65,7 +65,7 @@ void MLIRGen::addOp(const ggml_tensor *t) {
             auto op = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
             tensors.insert({source->name, op});
             sources.push_back(op);
-            // last = op;
+            last = op;
         }
     }
 
@@ -73,20 +73,11 @@ void MLIRGen::addOp(const ggml_tensor *t) {
     // default:;
     // }
 
-    // auto rankedTensorType = mlir::RankedTensorType::get({2, 2}, builder.getF32Type());
-    // llvm::SmallVector<float, 4> dataRaw = {1, 2, 3, 4};
-    // auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
-    // // firstTensor
-    // auto firstTensor = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
-    // // firstTensor
-    // auto secondTensor = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
-    // // AddOp
-    // auto result = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), firstTensor, secondTensor);
-    // // ReturnOp
-    // last = ;
+    auto result = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
+    last = result;
 }
 
 void MLIRGen::finish() {
-    // func.setFunctionType(builder.getFunctionType({}, {last.getType()}));
-    // mlir::func::ReturnOp::create(builder, builder.getUnknownLoc(), {last});
+    func.setFunctionType(builder.getFunctionType({}, {last.getType()}));
+    mlir::func::ReturnOp::create(builder, builder.getUnknownLoc(), {last});
 }
