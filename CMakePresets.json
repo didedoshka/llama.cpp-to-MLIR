@@ -29,7 +29,7 @@
             "inherits": "debug",
             "binaryDir": "build_sanitized",
             "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-fsanitize=address,undefined"
+                "CMAKE_CXX_FLAGS_DEBUG": "-g -fsanitize=address,undefined"
             }
         },
         {
