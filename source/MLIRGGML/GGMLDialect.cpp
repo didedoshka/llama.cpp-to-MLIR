@@ -11,8 +11,8 @@ using namespace mlir::ggml;
 //===----------------------------------------------------------------------===//
 
 void GGMLDialect::initialize() {
-  addOperations<
+    addOperations<
 #define GET_OP_LIST
 #include "GGMLOps.cpp.inc"
-      >();
+        >();
 }

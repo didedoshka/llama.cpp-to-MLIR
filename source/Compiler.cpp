@@ -55,20 +55,28 @@
 
 #include "Defines.h"
 
-namespace {
-enum InputType { GGUF, MLIR };
-} // namespace
-
 namespace cl = llvm::cl;
 
-static cl::opt<std::string> inputFilename(cl::Positional, cl::desc("<input file>"),
+static cl::opt<std::string> ggmlInputFile(cl::Positional, cl::desc("<gguf file>"),
                                           cl::value_desc("filename"));
+
+static cl::opt<std::string> mlirInputFile("input-mlir", cl::desc("Use this MLIR file instead"),
+                                          cl::value_desc("filename"));
+
+static cl::opt<std::string> mlirOutputFile("output-mlir", cl::desc("dump MLIR here"),
+                                           cl::value_desc("filename"), cl::init("-"));
+
+static cl::opt<int64_t> executeNOperations("execute-n-operations",
+                                           cl::desc("how many graph operations to execute"),
+                                           cl::value_desc("integre"), cl::init(INT32_MAX));
+
+// static cl::opt<bool> dontDumpMLIR("dont-dump", cl::desc("Don't dump MLIR"));
 
 namespace {
 enum Output { GGML, TensorTOSA, LLVMMLIR, Debug };
 } // namespace
 static cl::opt<enum Output>
-    outputType("output", cl::desc("Select the kind of output desired"),
+    outputType("output-kind", cl::desc("Select the kind of output desired"),
                cl::values(clEnumValN(GGML, "ggml", "output ggml dialect")),
                cl::values(clEnumValN(TensorTOSA, "tensor_tosa", "output lowered to tensor_tosa")),
                cl::values(clEnumValN(LLVMMLIR, "llvmmlir", "output lowered to llvmmlir")),
@@ -157,7 +165,7 @@ struct UserData {
 
 void llamaRun(UserData &userData, ggml_backend_sched_eval_callback cb) {
     llama_model_params model_params = llama_model_default_params();
-    struct llama_model *model = llama_model_load_from_file(inputFilename.data(), model_params);
+    struct llama_model *model = llama_model_load_from_file(ggmlInputFile.data(), model_params);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.cb_eval_user_data = &userData;
@@ -187,9 +195,6 @@ void llamaRun(UserData &userData, ggml_backend_sched_eval_callback cb) {
 // 12. SET_ROWS
 // 13. VIEW ggml.h:830?
 
-// constexpr int64_t executeNOperations = INT32_MAX;
-constexpr int64_t executeNOperations = 1;
-
 int main(int argc, char **argv) {
     // cl::HideUnrelatedOptions(CompilerCategory);
     cl::ParseCommandLineOptions(argc, argv);
@@ -209,7 +214,7 @@ int main(int argc, char **argv) {
     mlir::ModuleOp module = mlir::ModuleOp::create(builder.getUnknownLoc());
     builder.setInsertionPointToEnd(module.getBody());
 
-    UserData userData{MLIRGen(context, builder, module), DebugData()};
+    UserData userData{MLIRGen(builder), DebugData()};
     MLIRGen &mlirGen = userData.mlirGen;
     DebugData &debugData = userData.debugData;
 
@@ -264,9 +269,9 @@ int main(int argc, char **argv) {
         llvm::errs() << "module verification failed";
     }
 
-    module->dump();
-
-    LDBG() << debugData.result;
+    std::error_code EC;
+    llvm::raw_fd_ostream os(mlirOutputFile, EC);
+    module->print(os);
 
     if (outputType == Output::Debug) {
         mlir::OwningMemRef<float, 4> mlirResult(llvm::ArrayRef<int64_t>{0, 0, 0, 0});

@@ -100,7 +100,8 @@ std::string mlirTensorFormat(mlir::OwningMemRef<float, 4> &mlirResult) {
     const int64_t *ne = mlirResult->sizes;
     std::string str;
     llvm::raw_string_ostream strBuilder(str);
-    // strBuilder << std::string(tensor->name) << ' ' << ggml_get_type_traits(tensor->type)->type_name << '\n';
+    // strBuilder << std::string(tensor->name) << ' ' << ggml_get_type_traits(tensor->type)->type_name <<
+    // '\n';
     strBuilder << ne[0] << ' ' << ne[1] << ' ' << ne[2] << ' ' << ne[3] << '\n';
     for (int64_t i3 = 0; i3 < ne[0]; i3++) {
         strBuilder << "[\n";

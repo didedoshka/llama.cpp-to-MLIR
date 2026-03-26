@@ -13,8 +13,7 @@
 using namespace mlir;
 
 namespace {
-struct LoweringPass
-    : public PassWrapper<LoweringPass, OperationPass<ModuleOp>> {
+struct LoweringPass : public PassWrapper<LoweringPass, OperationPass<ModuleOp>> {
     MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LoweringPass)
     StringRef getArgument() const override { return "ggml_lowering"; }
 
@@ -29,15 +28,14 @@ struct AddOpLowering : public OpConversionPattern<ggml::AddOp> {
     using OpConversionPattern<ggml::AddOp>::OpConversionPattern;
     using OpAdaptor = typename OpConversionPattern<ggml::AddOp>::OpAdaptor;
 
-    LogicalResult
-    matchAndRewrite(ggml::AddOp op, OpAdaptor adaptor,
-                    ConversionPatternRewriter &rewriter) const final {
+    LogicalResult matchAndRewrite(ggml::AddOp op, OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const final {
         // auto loc = op->getLoc();
-        auto initTensor = tensor::EmptyOp::create(rewriter,
-                                rewriter.getUnknownLoc(),
-                                op.getLhs().getType().getShape(),
-                                op.getLhs().getType().getElementType());
-        auto addOp = linalg::AddOp::create(rewriter, rewriter.getUnknownLoc(), {op.getLhs(), op.getRhs()}, {initTensor});
+        auto initTensor =
+            tensor::EmptyOp::create(rewriter, rewriter.getUnknownLoc(), op.getLhs().getType().getShape(),
+                                    op.getLhs().getType().getElementType());
+        auto addOp = linalg::AddOp::create(rewriter, rewriter.getUnknownLoc(), {op.getLhs(), op.getRhs()},
+                                           {initTensor});
 
         rewriter.replaceOp(op, addOp);
         return success();
@@ -73,6 +71,4 @@ void LoweringPass::runOnOperation() {
 
 /// Create a pass for lowering operations in the `Affine` and `Std` dialects,
 /// for a subset of the Toy IR (e.g. matmul).
-std::unique_ptr<Pass> mlir::ggml::createLoweringPass() {
-    return std::make_unique<LoweringPass>();
-}
+std::unique_ptr<Pass> mlir::ggml::createLoweringPass() { return std::make_unique<LoweringPass>(); }

@@ -1,3 +1,3 @@
 #pragma once
 
-#define DEBUG_TYPE "ggml_mlir" 
+#define DEBUG_TYPE "ggml_mlir"

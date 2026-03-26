@@ -11,8 +11,7 @@
 
 #include "Defines.h"
 
-MLIRGen::MLIRGen(mlir::MLIRContext &context, mlir::OpBuilder &builder, mlir::ModuleOp &module)
-    : context(context), builder(builder), module(module) {
+MLIRGen::MLIRGen(mlir::OpBuilder &builder) : builder(builder) {
     func = mlir::func::FuncOp::create(builder, builder.getUnknownLoc(), "compute_graph_forward",
                                       builder.getFunctionType({}, {}));
     func->setAttr("llvm.emit_c_interface", builder.getUnitAttr());
@@ -36,14 +35,15 @@ static int64_t getGGMLTensorNumberOfElements(const ggml_tensor *t) {
 // TODO: optimize
 // TODO: other types
 static std::vector<float> getGGMLTensorData(const ggml_tensor *t) {
-    std::vector<float> result(getGGMLTensorNumberOfElements(t));
+    auto numberOfElements = getGGMLTensorNumberOfElements(t);
+    std::vector<float> result(numberOfElements);
     const int64_t *ne = t->ne;
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
                     const float v = ggmlTensorGet(t, i0, i1, i2, i3);
-                    result[ne[3] * i3 + ne[2] * i2 + ne[1] * i1 + i0] = v;
+                    result[i3 * ne[2] * ne[1] * ne[0] + i2 * ne[1] * ne[0] + i1 * ne[0] + i0] = v;
                 }
             }
         }
@@ -60,23 +60,24 @@ void MLIRGen::addOp(const ggml_tensor *t) {
         if (it != tensors.end()) {
             sources.push_back(it->getValue());
         } else {
-            auto rankedTensorType = getGGMLTensorType(t);
+            auto rankedTensorType = getGGMLTensorType(source);
             auto dataRaw = getGGMLTensorData(source);
             auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
-            auto op = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
-            tensors.insert({source->name, op});
-            sources.push_back(op);
-            last = op;
+            last = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
+            tensors.insert({source->name, last});
+            sources.push_back(last);
         }
     }
 
-    // switch (t->op) {
-    // default:;
-    // }
-
-    auto op = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
-    tensors.insert_or_assign(t->name, op);
-    last = op;
+    switch (t->op) {
+    case GGML_OP_ADD:
+        last = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
+        break;
+    default:
+        LDBG() << "Operation " << ggml_op_name(t->op) << " is not supported";
+        return;
+    }
+    tensors.insert_or_assign(t->name, last);
 }
 
 void MLIRGen::finish() {
