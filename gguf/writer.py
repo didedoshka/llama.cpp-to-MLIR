@@ -22,7 +22,7 @@ def writer_example(gguf_file_path) -> None:
     gguf_writer.add_uint32("didedoshka_test.attention.head_count", 1)
     # gguf_writer.add_uint32("didedoshka_test.rope.dimension_count", 48)
 
-    tensor = np.arange(4, dtype=np.float32).reshape((2, 2))
+    tensor = np.arange(16, dtype=np.float32).reshape((4, 4))
 
     gguf_writer.add_tensor("token_embd.weight", tensor)
     gguf_writer.add_tensor("output.weight", tensor)
