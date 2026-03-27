@@ -5,6 +5,7 @@
 
 #include "Utils.h"
 #include "ggml-cpu.h"
+#include "ggml.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 #include "MLIRGGML/GGMLOps.h"
@@ -19,9 +20,8 @@ MLIRGen::MLIRGen(mlir::OpBuilder &builder) : builder(builder) {
     builder.setInsertionPointToStart(entryBlock);
 }
 
-mlir::RankedTensorType MLIRGen::getGGMLTensorType(const ggml_tensor *t) {
-    // TODO: other types
-    return mlir::RankedTensorType::get({t->ne[3], t->ne[2], t->ne[1], t->ne[0]}, builder.getF32Type());
+mlir::RankedTensorType getGGMLTensorType(const ggml_tensor *t, mlir::Type mlirType) {
+    return mlir::RankedTensorType::get({t->ne[3], t->ne[2], t->ne[1], t->ne[0]}, mlirType);
 }
 
 static int64_t getGGMLTensorNumberOfElements(const ggml_tensor *t) {
@@ -33,16 +33,15 @@ static int64_t getGGMLTensorNumberOfElements(const ggml_tensor *t) {
 }
 
 // TODO: optimize
-// TODO: other types
-static std::vector<float> getGGMLTensorData(const ggml_tensor *t) {
+template <typename cppType> static std::vector<cppType> getGGMLTensorData(const ggml_tensor *t) {
     auto numberOfElements = getGGMLTensorNumberOfElements(t);
-    std::vector<float> result(numberOfElements);
+    std::vector<cppType> result(numberOfElements);
     const int64_t *ne = t->ne;
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    const float v = ggmlTensorGet(t, i0, i1, i2, i3);
+                    const cppType v = ggmlTensorGet<cppType>(t, i0, i1, i2, i3);
                     result[i3 * ne[2] * ne[1] * ne[0] + i2 * ne[1] * ne[0] + i1 * ne[0] + i0] = v;
                 }
             }
@@ -51,7 +50,14 @@ static std::vector<float> getGGMLTensorData(const ggml_tensor *t) {
     return result;
 }
 
-void MLIRGen::addOp(const ggml_tensor *t) {
+template <ggml_type ggmlType, typename cppType>
+mlir::DenseElementsAttr getDenseElementsAttr(ggml_tensor *t, mlir::Type mlirType) {
+    auto rankedTensorType = getGGMLTensorType(t, mlirType);
+    auto dataRaw = getGGMLTensorData<cppType>(t);
+    return mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
+}
+
+void MLIRGen::appendOp(const ggml_tensor *t) {
     llvm::SmallVector<mlir::Value, 2> sources;
 
     for (int i = 0; t->src[i] != nullptr; ++i) {
@@ -60,9 +66,16 @@ void MLIRGen::addOp(const ggml_tensor *t) {
         if (it != tensors.end()) {
             sources.push_back(it->getValue());
         } else {
-            auto rankedTensorType = getGGMLTensorType(source);
-            auto dataRaw = getGGMLTensorData(source);
-            auto data = mlir::DenseElementsAttr::get(rankedTensorType, llvm::ArrayRef(dataRaw));
+            mlir::DenseElementsAttr data;
+            switch (source->type) {
+            case GGML_TYPE_F32:
+                data = getDenseElementsAttr<GGML_TYPE_F32, float>(source, builder.getF32Type());
+                break;
+            case GGML_TYPE_I32:
+                data = getDenseElementsAttr<GGML_TYPE_I32, int32_t>(source, builder.getI32Type());
+                break;
+            default:;
+            }
             last = mlir::arith::ConstantOp::create(builder, builder.getUnknownLoc(), data);
             tensors.insert({source->name, last});
             sources.push_back(last);
@@ -72,6 +85,9 @@ void MLIRGen::addOp(const ggml_tensor *t) {
     switch (t->op) {
     case GGML_OP_ADD:
         last = mlir::ggml::AddOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
+        break;
+    case GGML_OP_GET_ROWS:
+        last = mlir::ggml::GetRowsOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
         break;
     default:
         LDBG() << "Operation " << ggml_op_name(t->op) << " is not supported";

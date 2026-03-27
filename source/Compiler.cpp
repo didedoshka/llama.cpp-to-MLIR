@@ -36,7 +36,9 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/FileUtilities.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -114,6 +116,8 @@ static llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
         pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
         // -convert-func-to-llvm
         pm.addPass(mlir::createConvertFuncToLLVMPass());
+        // -convert-index-to-llvm
+        pm.addPass(mlir::createConvertIndexToLLVMPass());
         // -convert-cf-to-llvm
         pm.addPass(mlir::createConvertControlFlowToLLVMPass());
         // -reconcile-unrealized-casts
@@ -122,7 +126,7 @@ static llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
     return pm.run(module);
 }
 
-static llvm::LogicalResult runJIT(mlir::ModuleOp &module, mlir::OwningMemRef<float, 4> &res) {
+static llvm::LogicalResult runJIT(mlir::ModuleOp &module, mlir::OwningMemRef<float, nDims> &res) {
     // Initialize LLVM targets.
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
@@ -159,7 +163,7 @@ struct DebugData {
 };
 
 struct UserData {
-    MLIRGen mlirGen;
+    std::optional<MLIRGen> mlirGen;
     DebugData debugData;
 };
 
@@ -209,18 +213,35 @@ int main(int argc, char **argv) {
     context.getOrLoadDialect<mlir::func::FuncDialect>();
     context.getOrLoadDialect<mlir::arith::ArithDialect>();
 
-    mlir::OpBuilder builder(&context);
+    bool doMLIRGen = mlirInputFile == "";
 
-    mlir::ModuleOp module = mlir::ModuleOp::create(builder.getUnknownLoc());
-    builder.setInsertionPointToEnd(module.getBody());
+    std::error_code EC;
+    llvm::raw_fd_ostream mlirOutputStream(mlirOutputFile, EC);
 
-    UserData userData{MLIRGen(builder), DebugData()};
-    MLIRGen &mlirGen = userData.mlirGen;
+    mlir::ModuleOp module;
+    UserData userData{std::nullopt, DebugData()};
+    if (doMLIRGen) {
+        mlir::OpBuilder builder(&context);
+        module = mlir::ModuleOp::create(builder.getUnknownLoc());
+        builder.setInsertionPointToEnd(module.getBody());
+        userData.mlirGen.emplace(builder);
+    } else {
+        std::string errorMessage;
+        auto file = mlir::openInputFile(mlirInputFile, &errorMessage);
+        if (!file) {
+            llvm::errs() << errorMessage << "\n";
+            return 0;
+        }
+
+        module = mlir::parseSourceString<mlir::ModuleOp>(file->getBuffer().str(), &context).release();
+        LDBG() << "parsed mlir from file " << mlirInputFile;
+        module->dump();
+    }
+
     DebugData &debugData = userData.debugData;
 
     llamaRun(userData, [](ggml_tensor *t, bool ask, void *rawUserData) {
         UserData *userData = static_cast<UserData *>(rawUserData);
-        MLIRGen &mlirGen = userData->mlirGen;
         DebugData &debugData = userData->debugData;
         if (debugData.nOperations == 2 * executeNOperations) {
             LDBG() << debugData.nOperations << " " << ask;
@@ -251,7 +272,9 @@ int main(int argc, char **argv) {
             if (src1 != nullptr) {
                 LDBG() << ggmlTensorFormat(src1);
             }
-            mlirGen.addOp(t);
+            if (userData->mlirGen) {
+                userData->mlirGen->appendOp(t);
+            }
             return true;
         }
         LDBG() << ggmlTensorFormat(t);
@@ -259,7 +282,9 @@ int main(int argc, char **argv) {
 
         return true;
     });
-    mlirGen.finish();
+    if (doMLIRGen) {
+        userData.mlirGen->finish();
+    }
 
     if (llvm::failed(RunPasses(module))) {
         llvm::errs() << "RunPasses failed";
@@ -269,12 +294,10 @@ int main(int argc, char **argv) {
         llvm::errs() << "module verification failed";
     }
 
-    std::error_code EC;
-    llvm::raw_fd_ostream os(mlirOutputFile, EC);
-    module->print(os);
+    module->print(mlirOutputStream);
 
     if (outputType == Output::Debug) {
-        mlir::OwningMemRef<float, 4> mlirResult(llvm::ArrayRef<int64_t>{0, 0, 0, 0});
+        mlir::OwningMemRef<float, nDims> mlirResult(llvm::ArrayRef<int64_t>{0, 0, 0, 0});
         if (llvm::failed(runJIT(module, mlirResult))) {
             llvm::errs() << "JIT failed";
         }
