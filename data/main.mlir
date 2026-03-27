@@ -6,18 +6,18 @@ module {
 
     // %0 = "ggml.GET_ROWS"(%cst, %cst_0) : (tensor<1x1x4x4xf32>, tensor<1x1x1x2xi32>) -> tensor<1x1x2x4xf32>
 
+    %0 = arith.constant 0 : index
+    %1 = arith.constant 1 : index
+    %2 = arith.constant 2 : index
     %init = tensor.empty() : tensor<2x4xf32>
-    %res = affine.for %i = 0 to 2 
-    iter_args(%tensor_iter = %init) -> (tensor<2x4xf32>) {
+    %res = scf.for %i = %0 to %2 step %1
+        iter_args(%tensor_prev = %init) -> (tensor<2x4xf32>) {
         %j = tensor.extract %indices[%i] : tensor<2xindex>
         %slice = tensor.extract_slice %values[%j, 0][1, 4][1, 1] :
             tensor<4x4xf32> to tensor<4xf32>
-
-        %tensor = tensor.insert_slice %slice into %tensor_iter[%i, 0][1, 4][1, 1] :
+        %tensor = tensor.insert_slice %slice into %tensor_prev[%i, 0][1, 4][1, 1] :
             tensor<4xf32> into tensor<2x4xf32>
-        affine.yield %tensor : tensor<2x4xf32>
-        // %to_print = tensor.cast %slice: tensor<4xf32> to tensor<*xf32>
-        // func.call @printMemrefF32(%to_print) : (tensor<*xf32>) -> ()
+        scf.yield %tensor : tensor<2x4xf32>
     }
 
     %to_print = tensor.cast %res: tensor<2x4xf32> to tensor<*xf32>
