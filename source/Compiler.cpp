@@ -102,14 +102,14 @@ static llvm::LogicalResult RunPasses(mlir::ModuleOp &module) {
         mlir::bufferization::buildBufferDeallocationPipeline(pm, bufferDeallocationPipelineOptions);
         // -convert-bufferization-to-memref
         pm.addPass(mlir::createConvertBufferizationToMemRefPass());
-        // -convert-linalg-to-loops
-        pm.addPass(mlir::createConvertLinalgToLoopsPass());
-        // -convert-scf-to-cf
-        pm.addPass(mlir::createSCFToControlFlowPass());
         // -expand-strided-metadata
         pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+        // -convert-linalg-to-affile-loops
+        pm.addPass(mlir::createConvertLinalgToAffineLoopsPass());
         // -lower-affine
         pm.addPass(mlir::createLowerAffinePass());
+        // -convert-scf-to-cf
+        pm.addPass(mlir::createSCFToControlFlowPass());
         // -convert-arith-to-llvm
         pm.addPass(mlir::createArithToLLVMConversionPass());
         // -finalize-memref-to-llvm
@@ -147,6 +147,7 @@ static llvm::LogicalResult runJIT(mlir::ModuleOp &module, mlir::OwningMemRef<flo
     auto resPointer = &*res;
     auto invocationResult =
         engine->invoke("compute_graph_forward", mlir::ExecutionEngine::result(resPointer));
+    LDBG() << res[{0, 0, 0, 0}];
     if (invocationResult) {
         return llvm::failure();
     }
@@ -302,15 +303,15 @@ int main(int argc, char **argv) {
             llvm::errs() << "JIT failed";
         }
         LDBG() << "JIT succeeded\n";
-        LDBG() << "GGML result tensor\n" << ggmlTensorFormat(debugData.result);
-        LDBG() << "MLIR result tensor\n" << mlirTensorFormat(mlirResult);
+        std::cout << "GGML result tensor\n" << ggmlTensorFormat(debugData.result);
+        std::cout << "MLIR result tensor\n" << mlirTensorFormat(mlirResult);
 
         auto difference = compareGGMLAndMLIRResults(debugData.result, mlirResult);
         if (difference != "") {
-            LDBG() << "Failure. MLIR and GGML produced different results";
-            LDBG() << difference;
+            std::cout << "Failure. MLIR and GGML produced different results";
+            std::cout << difference;
         } else {
-            LDBG() << "Success. MLIR and GGML produced the same result";
+            std::cout << "Success. MLIR and GGML produced the same result";
         }
     }
 

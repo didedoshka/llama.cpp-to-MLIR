@@ -89,6 +89,9 @@ void MLIRGen::appendOp(const ggml_tensor *t) {
     case GGML_OP_GET_ROWS:
         last = mlir::ggml::GetRowsOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
         break;
+    case GGML_OP_MUL_MAT:
+        last = mlir::ggml::MulMatOp::create(builder, builder.getUnknownLoc(), sources[0], sources[1]);
+        break;
     default:
         LDBG() << "Operation " << ggml_op_name(t->op) << " is not supported";
         return;

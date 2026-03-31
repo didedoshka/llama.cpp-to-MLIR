@@ -14,6 +14,7 @@
 #include "mlir/Support/TypeID.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+using namespace llvm;
 using namespace mlir;
 
 namespace {
@@ -72,7 +73,7 @@ struct GetRowsOpLowering : public OpConversionPattern<ggml::GetRowsOp> {
         auto jIndex = index::CastSOp::create(rewriter, rewriter.getUnknownLoc(), rewriter.getIndexType(), j);
 
         auto mInt = op.getValues().getType().getShape()[3];
-        auto mAttr =rewriter.getIndexAttr(mInt);
+        auto mAttr = rewriter.getIndexAttr(mInt);
         auto zeroAttr = rewriter.getIndexAttr(0);
         auto oneAttr = rewriter.getIndexAttr(1);
         auto slice = tensor::ExtractSliceOp::create(
@@ -80,14 +81,72 @@ struct GetRowsOpLowering : public OpConversionPattern<ggml::GetRowsOp> {
             {OpFoldResult(zeroAttr), OpFoldResult(zeroAttr), OpFoldResult(jIndex), OpFoldResult(zeroAttr)},
             {OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(mAttr)},
             {OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr)});
-        auto tensorCur =
-            tensor::InsertSliceOp::create(rewriter, rewriter.getUnknownLoc(), slice, tensorPrev,
+        auto tensorCur = tensor::InsertSliceOp::create(
+            rewriter, rewriter.getUnknownLoc(), slice, tensorPrev,
             {OpFoldResult(zeroAttr), OpFoldResult(zeroAttr), OpFoldResult(i), OpFoldResult(zeroAttr)},
             {OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(mAttr)},
             {OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr), OpFoldResult(oneAttr)});
         scf::YieldOp::create(rewriter, rewriter.getUnknownLoc(), {tensorCur});
 
         rewriter.replaceOp(op, loop);
+        return success();
+    }
+};
+
+tensor::ReshapeOp reshape2DTo4D(ConversionPatternRewriter &rewriter, TypedValue<TensorType> tensor) {
+    auto tensorShape = tensor.getType().getShape();
+    auto resultType =
+        RankedTensorType::get({1ll, 1ll, tensorShape[0], tensorShape[1]}, tensor.getType().getElementType());
+    auto resultShape = mlir::arith::ConstantOp::create(
+        rewriter, rewriter.getUnknownLoc(),
+        mlir::DenseElementsAttr::get(mlir::RankedTensorType::get({4}, rewriter.getIndexType()),
+                                     {1ll, 1ll, tensorShape[0], tensorShape[1]}));
+    auto result =
+        tensor::ReshapeOp::create(rewriter, rewriter.getUnknownLoc(), resultType, tensor, resultShape);
+    return result;
+}
+
+tensor::ReshapeOp reshape4DTo2D(ConversionPatternRewriter &rewriter, TypedValue<TensorType> tensor) {
+    auto tensorShape = tensor.getType().getShape();
+    auto resultType =
+        RankedTensorType::get({tensorShape[2], tensorShape[3]}, tensor.getType().getElementType());
+    auto resultShape = mlir::arith::ConstantOp::create(
+        rewriter, rewriter.getUnknownLoc(),
+        mlir::DenseElementsAttr::get(mlir::RankedTensorType::get({2}, rewriter.getIndexType()),
+                                     {tensorShape[2], tensorShape[3]}));
+    auto result =
+        tensor::ReshapeOp::create(rewriter, rewriter.getUnknownLoc(), resultType, tensor, resultShape);
+    return result;
+}
+
+struct MulMatOpLowering : public OpConversionPattern<ggml::MulMatOp> {
+    using OpConversionPattern<ggml::MulMatOp>::OpConversionPattern;
+    using OpAdaptor = typename OpConversionPattern<ggml::MulMatOp>::OpAdaptor;
+
+    LogicalResult matchAndRewrite(ggml::MulMatOp op, OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const final {
+        auto a = reshape4DTo2D(rewriter, op.getA());
+        auto b = reshape4DTo2D(rewriter, op.getB());
+        auto bShape = b.getType().getShape();
+
+        auto bTransposedShape = {bShape[1], bShape[0]};
+        auto initBTransposed = tensor::EmptyOp::create(rewriter, rewriter.getUnknownLoc(), bTransposedShape,
+                                                       b.getType().getElementType());
+        auto bTransposed =
+            linalg::TransposeOp::create(rewriter, rewriter.getUnknownLoc(), b, initBTransposed, {1, 0});
+
+        auto initResultTensor = tensor::EmptyOp::create(rewriter, rewriter.getUnknownLoc(),
+                                                        {bShape[0], a.getType().getShape()[0]},
+                                                        op.getResult().getType().getElementType());
+
+        SmallVector<Value> matmulInputs{bTransposed.getResult()};
+        matmulInputs.insert(matmulInputs.begin(), a);
+        auto result =
+            linalg::MatmulOp::create(rewriter, rewriter.getUnknownLoc(), matmulInputs, {initResultTensor});
+
+        auto result4D = reshape2DTo4D(rewriter, cast<TypedValue<TensorType>>(result->getResult(0)));
+
+        rewriter.replaceOp(op, result4D);
         return success();
     }
 };
@@ -110,6 +169,7 @@ void LoweringPass::runOnOperation() {
     RewritePatternSet patterns(&getContext());
     patterns.add<AddOpLowering>(&getContext());
     patterns.add<GetRowsOpLowering>(&getContext());
+    patterns.add<MulMatOpLowering>(&getContext());
 
     // With the target and rewrite patterns defined, we can now attempt the
     // conversion. The conversion will signal failure if any of our `illegal`

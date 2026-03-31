@@ -19,7 +19,6 @@ def AddOp : GGML_Op<"ADD"> {
     let arguments = (ins F32Tensor:$lhs, F32Tensor:$rhs);
     let results = (outs F32Tensor);
 
-  // Allow building an AddOp with from the two input operands.
     let builders = [
         OpBuilder<(ins "Value":$lhs, "Value":$rhs), [{
             build($_builder, $_state, lhs.getType(), lhs, rhs);
@@ -33,6 +32,16 @@ def GetRowsOp : GGML_Op<"GET_ROWS"> {
     let results = (outs F32Tensor);
     let builders = [
         OpBuilder<(ins "Value":$values, "Value":$indices)> 
+    ];
+}
+
+// Only two-dimensional for now
+def MulMatOp : GGML_Op<"MUL_MAT"> {
+    let arguments = (ins F32Tensor:$A, F32Tensor:$B);
+    let results = (outs F32Tensor);
+
+    let builders = [
+        OpBuilder<(ins "Value":$A, "Value":$B)> 
     ];
 }
 

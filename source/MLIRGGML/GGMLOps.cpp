@@ -19,3 +19,16 @@ void GetRowsOp::build(mlir::OpBuilder &builder, mlir::OperationState &state, mli
         RankedTensorType::get({1, 1, indicesShape[3], valuesShape[3]}, valuesType.getElementType());
     GetRowsOp::build(builder, state, resultType, values, indices);
 }
+
+void MulMatOp::build(mlir::OpBuilder &builder, mlir::OperationState &state, mlir::Value A,
+                      mlir::Value B) {
+    auto AType = llvm::dyn_cast<mlir::RankedTensorType>(A.getType());
+    auto AShape = AType.getShape();
+
+    auto BType = llvm::dyn_cast<mlir::RankedTensorType>(B.getType());
+    auto BShape = BType.getShape();
+
+    auto resultType =
+        RankedTensorType::get({1, 1, BShape[2], AShape[2]}, AType.getElementType());
+    GetRowsOp::build(builder, state, resultType, A, B);
+}
